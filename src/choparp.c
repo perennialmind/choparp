@@ -284,14 +284,8 @@ atoip(char *buf, u_int32_t *ip_addr){
     unsigned long hex_addr;
     int len = 0;
 
-    if (sscanf(buf, "%u.%u.%u.%u%n", &i0, &i1, &i2, &i3, &len) >= 4
-        && i0 <= 0xff
-        && i1 <= 0xff
-        && i2 <= 0xff
-        && i3 <= 0xff
-        && !buf[len]
-    ) {
-        *ip_addr = (i0 << 24) + (i1 << 16) + (i2 << 8) + i3;
+    if (inet_pton(AF_INET, buf, ip_addr) == 1) {
+        *ip_addr = ntohl(*ip_addr);
         return 0;
     }
     if (sscanf(buf, "0x%lx%n", &hex_addr, &len) >= 1
