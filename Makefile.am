@@ -2,6 +2,14 @@ bin_PROGRAMS = choparp
 choparp_SOURCES = src/choparp.c
 man_MANS = src/choparp.8
 
+install-exec-hook:
+	$(LN_S) choparp$(EXEEXT) $(DESTDIR)$(bindir)/choparpd$(EXEEXT)
+
+all-local: choparpd$(EXEEXT)
+
+choparpd: choparp$(EXEEXT)
+	$(LN_S) choparp$(EXEEXT) choparpd$(EXEEXT)
+
 AM_TESTS_ENVIRONMENT = \
 	AM_BUILDDIR='$(abs_top_builddir)'; \
 	AM_SRCDIR='$(abs_top_srcdir)'; \

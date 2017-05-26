@@ -73,6 +73,7 @@ struct cidr *targets = NULL, *excludes = NULL;
 char errbuf[PCAP_ERRBUF_SIZE];
 u_char target_mac[ETHER_ADDR_LEN];	/* target MAC address */
 
+static int want_sysv_daemon = 0;
 static char *pidfile = NULL;
 static int verbose = 0;
 static pcap_t *pc;
@@ -300,18 +301,30 @@ atoip(char *buf, u_int32_t *ip_addr){
 }
 
 void
+detach(){
+    if (!want_sysv_daemon)
+        return;
+    if (daemon(0,0) < 0) {
+        perror("daemon");
+        exit(1);
+    }
+}
+
+void
 usage(void){
-    fprintf(stderr,"usage: choparp [-p PIDFILE] if_name mac_addr [-]addr/mask...\n");
+    fprintf(stderr,"usage: choparp[d] [-d|-f] [-p PIDFILE] if_name mac_addr [-]addr/mask...\n");
     exit(2);
 }
 
 int
 main(int argc, char **argv){
     int opt;
+    char *execname = NULL;
     char *ifname;
     char *filter, *targets_filter, *excludes_filter;
     struct cidr **targets_tail = &targets, **excludes_tail = &excludes;
     struct sigaction act;
+    int retval_fd;
 
 #define APPEND(LIST,ADDR,MASK) \
     do {							\
@@ -322,8 +335,21 @@ main(int argc, char **argv){
 	(LIST ## _tail) = &(*(LIST ## _tail))->next;		\
     } while (0)
 
-    while ((opt = getopt(argc, argv, "+p:vh")) != -1) {
+    /* run as daemon by default if invoked as choparpd */
+    if (argc > 0) {
+        execname = strrchr(argv[0], '/');
+        execname = execname ? execname + 1 : argv[0];
+        want_sysv_daemon = strcmp(execname, "choparpd") == 0;
+    }
+
+    while ((opt = getopt(argc, argv, "+p:dfvh")) != -1) {
         switch (opt) {
+        case 'd':
+            want_sysv_daemon = 1;
+            break;
+        case 'f':
+            want_sysv_daemon = 0;
+            break;
         case 'p':
             pidfile = optarg;
             break;
@@ -420,6 +446,7 @@ main(int argc, char **argv){
     pc = open_pcap(ifname, filter);
     free(filter);
 
+    detach();
     setup_pidfile();
 
     memset(&act, 0, sizeof(act));

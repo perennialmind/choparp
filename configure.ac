@@ -24,8 +24,10 @@ AC_REQUIRE_AUX_FILE([tap-driver.sh])
 
 # Checks for programs, e.g., AC_PROG_CC
 AC_PROG_CC
-# only needef for automake < 1.14
+# only needed for automake < 1.14
 AM_PROG_CC_C_O
+# For choparpd
+AC_PROG_LN_S
 
 # Checks for libraries.
 AC_CHECK_LIB([pcap], [pcap_lookupdev], [], [AC_MSG_ERROR([missing required library libpcap])])

@@ -28,6 +28,9 @@ fi
 # Allow this many seconds for choparp start-up before sending test arp requests
 startup_grace=1
 
+# Allow this many seconds for choparp to cleanly shut-down before checking results
+shutdown_grace=1
+
 # Any arbitrary value should do, but might as well switch it up between runs
 rnd_byte="$(dd if=/dev/urandom bs=1 count=1 2>/dev/null | od -A n -t d)"
 
@@ -60,7 +63,7 @@ found() {
 
 #######################################################################
 
-echo "1..9"
+echo "1..11"
 
 #######################################################################
 
@@ -253,6 +256,84 @@ then
 	echo "not ok $test_desc # pidfile not removed after exit"
 else
 	echo "ok $test_desc"
+fi
+
+#######################################################################
+
+test_desc="10 - Daemon by flag"
+pidfile=$(mktemp /tmp/choparp.pid-XXXXXXXX)
+timeout --kill-after 1s 5s "$AM_BUILDDIR"/choparp -d -v -v -p "$pidfile" is-at auto $(ipaddr 16)
+sleep $startup_grace
+timeout_status=$?
+
+chopid_from_file=$(cat "$pidfile")
+arp_for 16
+
+if [ "$timeout_status" -eq 124 ] || [ "$timeout_status" -eq 137 ]
+then
+	echo "not ok $test_desc # daemon timeout (failed to detach)"
+elif ! [ "$timeout_status" -eq 0 ]
+then
+	echo "not ok $test_desc # abnormal exit $timeout_status"
+elif ! found 16
+then
+	echo "not ok $test_desc # MAC resolution failure"
+elif ! (
+	[ -n "$chopid_from_file" ] && [ "$chopid_from_file" -gt 0 ] &&
+	[ -e "/proc/$chopid_from_file" ]
+)
+then
+	echo "not ok $test_desc # invalid pidfile"
+else
+	kill "$chopid_from_file" && sleep $shutdown_grace
+	if kill "$chopid_from_file"
+	then
+		echo "not ok $test_desc # daemon still running after SIGTERM"
+	elif [ -f "$pidfile" ]
+	then
+		echo "not ok $test_desc # pidfile not removed after exit"
+	else
+		echo "ok $test_desc"
+	fi
+fi
+
+#######################################################################
+
+test_desc="11 - Daemon by name"
+pidfile=$(mktemp /tmp/choparp.pid-XXXXXXXX)
+timeout --kill-after 1s 5s "$AM_BUILDDIR"/choparpd -v -v -p "$pidfile" is-at auto $(ipaddr 17)
+sleep $startup_grace
+timeout_status=$?
+
+chopid_from_file=$(cat "$pidfile")
+arp_for 17
+
+if [ "$timeout_status" -eq 124 ] || [ "$timeout_status" -eq 137 ]
+then
+	echo "not ok $test_desc # daemon timeout (failed to detach)"
+elif ! [ "$timeout_status" -eq 0 ]
+then
+	echo "not ok $test_desc # abnormal exit $timeout_status"
+elif ! found 17
+then
+	echo "not ok $test_desc # MAC resolution failure"
+elif ! (
+	[ -n "$chopid_from_file" ] && [ "$chopid_from_file" -gt 0 ] &&
+	grep choparpd "/proc/$chopid_from_file/comm"
+)
+then
+	echo "not ok $test_desc # invalid pidfile"
+else
+	kill "$chopid_from_file" && sleep $shutdown_grace
+	if kill "$chopid_from_file"
+	then
+		echo "not ok $test_desc # daemon still running after SIGTERM"
+	elif [ -f "$pidfile" ]
+	then
+		echo "not ok $test_desc # pidfile not removed after exit"
+	else
+		echo "ok $test_desc"
+	fi
 fi
 
 #######################################################################
