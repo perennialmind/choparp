@@ -59,6 +59,8 @@
 #include <net/if_dl.h>
 #endif
 
+#include "config.h"
+
 /* ARP Header                                      */ 
 #define ARP_REQUEST 1   /* ARP Request             */ 
 #define ARP_REPLY 2     /* ARP Reply               */ 
@@ -77,6 +79,8 @@ static int want_sysv_daemon = 0;
 static char *pidfile = NULL;
 static int verbose = 0;
 static pcap_t *pc;
+static int child_status_pipefd[2] = { -1, -1};
+
 
 char* cidr_to_str(struct cidr *a) {
     char addr[INET_ADDRSTRLEN], mask[INET_ADDRSTRLEN];
@@ -301,10 +305,77 @@ atoip(char *buf, u_int32_t *ip_addr){
 }
 
 void
-detach(){
+handle_sig_stub(int sig) {
+    // interrupt syscall only
+}
+
+int
+daemon_parent_read() {
+    int exit_val = 1;
+    struct sigaction alrm_act = {
+        .sa_handler = handle_sig_stub
+    };
+    sigaction(SIGALRM, &alrm_act, NULL);
+    alarm(2);
+    close(child_status_pipefd[1]);
+    if (read(child_status_pipefd[0], &exit_val, sizeof(exit_val)) != sizeof(exit_val)) {
+        // timeout or improper child exit
+        exit_val = 1;
+    }
+    if (exit_val)
+        fprintf(stderr, "daemon initialization failed\n");
+}
+
+void
+daemon_child_notify(int status) {
+    if (child_status_pipefd[1] == -1)
+        return;
+    write(child_status_pipefd[1], &status, sizeof(status));
+    close(child_status_pipefd[1]);
+    child_status_pipefd[1] = -1;
+}
+
+void
+daemon_notify_ready() {
+    // SysV-style daemons notify completion by deferred exit
+    daemon_child_notify(0);
+
+    // systemd daemons can use the socket protocol defined in sd_notify(3)
+#ifdef HAVE_LIBSYSTEMD
+    sd_notify(0, "READY=1");
+#endif
+}
+
+void
+daemon_init() {
     if (!want_sysv_daemon)
         return;
-    if (daemon(0,0) < 0) {
+
+    pid_t first_child_pid;
+    struct sigaction chld_act = {
+        .sa_handler = handle_sig_stub,
+        .sa_flags = SA_NOCLDWAIT | SA_RESTART
+    };
+    sigaction(SIGCHLD, &chld_act, NULL);
+
+    if (pipe(child_status_pipefd) < 0) {
+        perror("pipe");
+        exit(1);
+    }
+    if ( (first_child_pid = fork()) < 0) {
+        perror("failed fork");
+        exit(1);
+    }
+    if (first_child_pid > 0) {
+        exit(daemon_parent_read());
+    }
+    close(child_status_pipefd[0]);
+    child_status_pipefd[0] = -1;
+    // ensure pipefd will not be closed by daemon(3)
+    while((unsigned)child_status_pipefd[1] <= 2)
+        child_status_pipefd[1] = dup(child_status_pipefd[1]);
+
+    if (daemon(0, 0) < 0) {
         perror("daemon");
         exit(1);
     }
@@ -446,7 +517,7 @@ main(int argc, char **argv){
     pc = open_pcap(ifname, filter);
     free(filter);
 
-    detach();
+    daemon_init();
     setup_pidfile();
 
     memset(&act, 0, sizeof(act));
@@ -454,6 +525,7 @@ main(int argc, char **argv){
     sigaction(SIGINT, &act, NULL);
     sigaction(SIGTERM, &act, NULL);
 
+    daemon_notify_ready();
     if (pcap_loop(pc, 0, process_arp, (u_char*)pc) == -1) {
         pcap_perror(pc, "pcap_loop");
         exit(1);

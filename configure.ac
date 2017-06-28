@@ -18,6 +18,12 @@ AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE([subdir-objects foreign -Wall -Werror])
 AC_CONFIG_FILES([Makefile])
 
+# Build options
+AC_ARG_WITH([systemd],
+    [AS_HELP_STRING([--with-systemd], [support systemd daemon Type=notify @<:@default=check@:>@])],
+    [],
+    [with_systemd=check])
+
 # TAP test driver support
 AC_PROG_AWK
 AC_REQUIRE_AUX_FILE([tap-driver.sh])
@@ -36,6 +42,23 @@ AC_CHECK_LIB([pcap], [pcap_lookupdev], [], [AC_MSG_ERROR([missing required libra
 AC_CHECK_HEADERS([arpa/inet.h fcntl.h netinet/in.h stdlib.h string.h sys/ioctl.h sys/socket.h unistd.h],
     [], [AC_MSG_ERROR([missing required platform headers])])
 AC_CHECK_HEADER([pcap.h], [], [AC_MSG_ERROR([missing required header pcap.h])])
+
+# Check for optional libs
+AS_IF([test "x$with_systemd" != xno],
+    [AC_CHECK_HEADERS([systemd/sd-daemon.h],
+        [AC_CHECK_LIB([systemd],
+            [sd_notify],
+            [],
+            [if test "x$with_systemd" != xcheck; then
+                AC_MSG_ERROR([--with-systemd was given, but required library libsystemd missing])
+             fi
+            ])
+        ],
+        [if test "x$with_systemd" != xcheck; then
+            AC_MSG_ERROR([--with-systemd was given, but required header systemd/sd-daemon.h missing])
+         fi
+        ])
+    ])
 
 # Checks for typedefs, structures, and compiler characteristics.
 

@@ -26,10 +26,10 @@ then
 fi
 
 # Allow this many seconds for choparp start-up before sending test arp requests
-startup_grace=1
+startup_grace=2
 
 # Allow this many seconds for choparp to cleanly shut-down before checking results
-shutdown_grace=1
+shutdown_grace=4
 
 # Any arbitrary value should do, but might as well switch it up between runs
 rnd_byte="$(dd if=/dev/urandom bs=1 count=1 2>/dev/null | od -A n -t d)"
@@ -61,9 +61,25 @@ found() {
 		grep -i -q "$(ipaddr $1) lladdr ${2:-.*} REACHABLE"
 }
 
+stop_process() {
+	pid=$1
+	comm="${2:-choparp}"
+	i=$shutdown_grace
+	sig=TERM
+	while ps -p "$pid" -o "comm=" | grep -q "$comm"
+	do
+		[ $i -gt 1 ] || sig=KILL
+		kill -s $sig "$pid"
+		[ $i -gt 1 ] || return
+		sleep 1
+		: $(( i-=1 ))
+	done
+	true
+}
+
 #######################################################################
 
-echo "1..11"
+echo "1..12"
 
 #######################################################################
 
@@ -73,7 +89,7 @@ chopid=$!
 sleep $startup_grace
 
 arp_for 1
-kill $chopid
+stop_process $chopid
 
 if ! wait $chopid
 then
@@ -93,7 +109,7 @@ chopid=$!
 sleep $startup_grace
 
 arp_for 2 3
-kill $chopid
+stop_process $chopid
 
 if ! wait $chopid
 then
@@ -114,7 +130,7 @@ sleep $startup_grace
 
 arp_for 4
 arp_for 5
-kill $chopid
+stop_process $chopid
 
 if ! wait $chopid
 then
@@ -134,7 +150,7 @@ chopid=$!
 sleep $startup_grace
 
 arp_for 6 7
-kill $chopid
+stop_process $chopid
 
 if ! wait $chopid
 then
@@ -154,7 +170,7 @@ chopid=$!
 sleep $startup_grace
 
 arp_for 8 9 10 11
-kill $chopid
+stop_process $chopid
 
 if ! wait $chopid
 then
@@ -174,7 +190,7 @@ chopid=$!
 sleep $startup_grace
 
 arp_for 12
-kill $chopid
+stop_process $chopid
 
 if ! wait $chopid
 then
@@ -194,7 +210,7 @@ chopid=$!
 sleep $startup_grace
 
 arp_for 13
-kill $chopid
+stop_process $chopid
 
 ip neigh show dev who-has
 
@@ -216,7 +232,7 @@ chopid=$!
 sleep $startup_grace
 
 arp_for 14
-kill $chopid
+stop_process $chopid
 
 ip neigh show dev who-has
 
@@ -240,7 +256,7 @@ sleep $startup_grace
 
 chopid_from_file=$(cat "$pidfile")
 arp_for 15
-kill $chopid
+stop_process $chopid
 
 if ! wait $chopid
 then
@@ -262,7 +278,8 @@ fi
 
 test_desc="10 - Daemon by flag"
 pidfile=$(mktemp /tmp/choparp.pid-XXXXXXXX)
-timeout --kill-after 1s 5s "$AM_BUILDDIR"/choparp -d -v -v -p "$pidfile" is-at auto $(ipaddr 16)
+timeout --kill-after 1s ${startup_grace}s \
+	"$AM_BUILDDIR"/choparp -d -v -v -p "$pidfile" is-at auto $(ipaddr 16)
 sleep $startup_grace
 timeout_status=$?
 
@@ -280,13 +297,12 @@ then
 	echo "not ok $test_desc # MAC resolution failure"
 elif ! (
 	[ -n "$chopid_from_file" ] && [ "$chopid_from_file" -gt 0 ] &&
-	[ -e "/proc/$chopid_from_file" ]
+	ps -p $chopid_from_file -o "comm=" | grep -q choparp
 )
 then
 	echo "not ok $test_desc # invalid pidfile"
 else
-	kill "$chopid_from_file" && sleep $shutdown_grace
-	if kill "$chopid_from_file"
+	if ! stop_process "$chopid_from_file"
 	then
 		echo "not ok $test_desc # daemon still running after SIGTERM"
 	elif [ -f "$pidfile" ]
@@ -301,7 +317,8 @@ fi
 
 test_desc="11 - Daemon by name"
 pidfile=$(mktemp /tmp/choparp.pid-XXXXXXXX)
-timeout --kill-after 1s 5s "$AM_BUILDDIR"/choparpd -v -v -p "$pidfile" is-at auto $(ipaddr 17)
+timeout --kill-after 1s ${startup_grace}s \
+	"$AM_BUILDDIR"/choparpd -v -v -p "$pidfile" is-at auto $(ipaddr 17)
 sleep $startup_grace
 timeout_status=$?
 
@@ -319,13 +336,12 @@ then
 	echo "not ok $test_desc # MAC resolution failure"
 elif ! (
 	[ -n "$chopid_from_file" ] && [ "$chopid_from_file" -gt 0 ] &&
-	grep choparpd "/proc/$chopid_from_file/comm"
+	ps -p $chopid_from_file -o "comm=" | grep -q choparpd
 )
 then
 	echo "not ok $test_desc # invalid pidfile"
 else
-	kill "$chopid_from_file" && sleep $shutdown_grace
-	if kill "$chopid_from_file"
+	if ! stop_process "$chopid_from_file"
 	then
 		echo "not ok $test_desc # daemon still running after SIGTERM"
 	elif [ -f "$pidfile" ]
@@ -335,6 +351,47 @@ else
 		echo "ok $test_desc"
 	fi
 fi
+
+#######################################################################
+
+test_desc="12 - Systemd daemon Type=notify"
+for i in once; do
+	if ! grep -q "define HAVE_LIBSYSTEMD" "$AM_BUILDDIR/config.h"; then
+		echo "ok $test_desc # SKIP systemd support not enabled"
+		break
+	fi
+	sockd="$(mktemp -d /tmp/choparp.sock-XXXXXXXX)"
+	socat UNIX-RECVFROM:$sockd/sock $sockd/msg &
+	socat_pid=$!
+	sleep $startup_grace
+	if ! [ -S $sockd/sock ]
+	then
+		echo "ok $test_desc # SKIP socat socket setup failed"
+		break
+	fi
+	NOTIFY_SOCKET="$sockd/sock" "$AM_BUILDDIR"/choparp is-at auto $(ipaddr 18) &
+	chopid=$!
+	sleep $startup_grace
+	
+	arp_for 18
+	stop_process $chopid
+	stop_process $socat_pid socat
+	
+	if ! wait $chopid
+	then
+		echo "not ok $test_desc # abnormal exit $?"
+	elif ! found 18
+	then
+		echo "not ok $test_desc # MAC resolution failure"
+	elif ! wait "$socat_pid" || ! grep -q 'READY=1' $sockd/msg
+	then
+		echo "not ok $test_desc # failed to confirm sd_notify support"
+	else
+		echo "ok $test_desc"
+	fi
+	rm $sockd/{msg,sock}
+	rmdir $sockd
+done
 
 #######################################################################
 
